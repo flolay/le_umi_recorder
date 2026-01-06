@@ -1,6 +1,6 @@
-# WebXR Controller Tracking
+# UMI Recorder
 
-Stream Meta Quest 3 controller poses to Python at 30+ Hz with real-time Rerun visualization.
+Record robot teleoperation demonstrations using Meta Quest 3 controllers and webcams in LeRobot format.
 
 ## Architecture
 
@@ -11,72 +11,48 @@ Quest 3 Browser ──WebSocket──> Python Server ──> Rerun Visualizer
                                    └──> REST API / Custom Apps
 ```
 
+## Installation
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install all dependencies
+uv sync
+```
+
 ## Quick Start
 
 ```bash
-# Start server (auto-setup with SSL)
-./start_server.sh
+# Generate SSL certificate (required for WebXR)
+uv run python backend/generate_cert.py
+
+# Start the server
+uv run python backend/server.py
 
 # On Quest 3 browser: https://<your-ip>:8000
 # Accept SSL warning, click "Enter VR"
-```
-
-**Manual setup:**
-```bash
-cd backend
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python generate_cert.py  # Required for WebXR
-python server.py
-```
-
-## Python Client
-
-```bash
-cd client && pip install -e .
-```
-
-```python
-from quest_controller_client import QuestControllerClientSync
-
-with QuestControllerClientSync('https://localhost:8000') as client:
-    for pose in client:
-        if pose.left:
-            print(f"Left: {pose.left.position}")
-```
-
-## REST API
-
-```bash
-curl https://localhost:8000/api/pose/latest
-curl https://localhost:8000/api/status
 ```
 
 ## UMI Dataset Recording
 
 Record controller poses + camera in LeRobot format for robot learning.
 
-### Setup
-
-```bash
-cd umi && pip install -r requirements.txt
-```
-
 ### Recording
 
 ```bash
-# List cameras
-python -m umi.lerobot_recorder --list-cameras
+# List available cameras
+uv run umi-recorder --list-cameras
 
 # Using config file (recommended)
 cp umi/config.example.yaml config.yaml  # Edit with your settings
-python -m umi.lerobot_recorder --config config.yaml
+uv run umi-recorder --config config.yaml
 
-# Or with CLI args
-python -m umi.lerobot_recorder --repo-id user/dataset --camera 0:wrist:640x480
+# Or with CLI arguments
+uv run umi-recorder --repo-id user/dataset --camera 0:wrist:640x480
 
 # With robot URDF (IK visualization)
-python -m umi.lerobot_recorder --config config.yaml --urdf /path/to/robot.urdf
+uv run umi-recorder --config config.yaml --urdf /path/to/robot.urdf
 ```
 
 **Config file** (`config.yaml`):
@@ -96,8 +72,14 @@ tasks:
 ### Playback
 
 ```bash
-python -m umi.visualize_dataset --dataset ./datasets/my_dataset --list
-python -m umi.visualize_dataset --dataset ./datasets/my_dataset --episode 0
+uv run umi-visualize --dataset ./datasets/my_dataset --list
+uv run umi-visualize --dataset ./datasets/my_dataset --episode 0
+```
+
+### Gripper Calibration
+
+```bash
+uv run umi-calibrate-gripper
 ```
 
 ### Dataset Format
@@ -107,6 +89,111 @@ datasets/my_dataset/
 ├── meta/info.json, episodes.jsonl
 ├── data/episode_*.parquet
 └── videos/observation.images.*/episode_*.mp4
+```
+
+## Python Client Library
+
+Access controller tracking data programmatically.
+
+### Installation
+
+```bash
+cd client && pip install -e .
+```
+
+### Basic Usage
+
+```python
+from quest_controller_client import QuestControllerClientSync
+
+with QuestControllerClientSync('https://localhost:8000') as client:
+    # Get latest pose
+    pose = client.get_latest_pose()
+    if pose:
+        if pose.left:
+            print(f"Left: {pose.left.position}")
+        if pose.right:
+            print(f"Right: {pose.right.position}")
+```
+
+### Streaming Real-Time Data
+
+```python
+from quest_controller_client import QuestControllerClientSync
+
+def on_pose(pose):
+    if pose.left:
+        print(f"Left: {pose.left.position}")
+
+with QuestControllerClientSync('https://localhost:8000') as client:
+    client.stream(on_pose, blocking=True)
+```
+
+### Polling at Fixed Rate
+
+```python
+from quest_controller_client import QuestControllerClientSync
+
+def on_pose(pose):
+    if pose and pose.left:
+        print(f"Position: {pose.left.position}")
+
+with QuestControllerClientSync('https://localhost:8000') as client:
+    # Poll at 30 Hz for 10 seconds
+    client.poll(on_pose, rate_hz=30, duration=10)
+```
+
+### Async API (High Performance)
+
+```python
+import asyncio
+from quest_controller_client import QuestControllerClient
+
+async def main():
+    async with QuestControllerClient('https://localhost:8000') as client:
+        status = await client.get_status()
+        print(f"Server running at {status.current_frame_rate} Hz")
+
+        pose = await client.get_latest_pose()
+        if pose and pose.left:
+            print(f"Left controller: {pose.left.position}")
+
+asyncio.run(main())
+```
+
+### Button States
+
+```python
+with QuestControllerClientSync('https://localhost:8000') as client:
+    pose = client.get_latest_pose()
+    if pose and pose.left:
+        # Check if trigger is pressed (button 0)
+        if pose.left.is_button_pressed(0):
+            print("Trigger pressed!")
+        # Get grip value (button 1)
+        grip_value = pose.left.get_button_value(1)
+        print(f"Grip: {grip_value:.2f}")
+```
+
+### Data Models
+
+**PoseData:**
+- `timestamp: float` - Pose timestamp
+- `left: Optional[ControllerState]` - Left controller
+- `right: Optional[ControllerState]` - Right controller
+- `latency: float` - Latency in milliseconds
+
+**ControllerState:**
+- `position: Tuple[float, float, float]` - Position (x, y, z) in meters
+- `orientation: Tuple[float, float, float, float]` - Quaternion (x, y, z, w)
+- `is_button_pressed(index: int) -> bool` - Check button state
+- `get_button_value(index: int) -> float` - Get button value (0-1)
+
+## REST API
+
+```bash
+curl https://localhost:8000/api/pose/latest
+curl https://localhost:8000/api/status
 ```
 
 ## Troubleshooting
@@ -121,5 +208,6 @@ datasets/my_dataset/
 ## Requirements
 
 - Meta Quest 3
-- Python 3.8+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) package manager
 - Same network for Quest and server
