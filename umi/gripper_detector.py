@@ -1,6 +1,22 @@
 """
 Gripper State Detection Module
 
+.. deprecated::
+    This module is deprecated in favor of the new pipeline-based gripper
+    detection using Google Gemini API. The new approach provides:
+    - Semantic understanding of gripper state (not just color detection)
+    - Both "measured" (actual) and "commanded" (intended) gripper values
+    - Better handling of occlusion and lighting variations
+
+    Use `umi.pipeline.stage4_gripper.GripperDetector` instead:
+
+        from umi.pipeline import GripperDetector
+        detector = GripperDetector(Stage4Config())
+        await detector.process_episode(stage1_dir, output_dir)
+
+    This legacy module is kept for backward compatibility with existing
+    calibration files but will be removed in a future version.
+
 Fast vision-based gripper state detection using HSV color thresholding
 to track orange gripper tips.
 
@@ -9,6 +25,14 @@ Usage:
     result = detector.get_gripper_state(frame)
     print(f"Gripper state: {result.state:.2f}")  # 0=open, 1=closed
 """
+
+import warnings
+
+warnings.warn(
+    "umi.gripper_detector is deprecated. Use umi.pipeline.stage4_gripper instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from dataclasses import dataclass
 from pathlib import Path
