@@ -26,6 +26,8 @@ import cv2
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import rerun as rr
+from scipy.spatial.transform import Rotation
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'backend'))
@@ -97,6 +99,82 @@ class RawRecorder:
         self._quit_requested = False
         self._lock = threading.Lock()
 
+        # Rerun visualization
+        self._rerun_initialized = False
+        self._latest_frame: Optional[np.ndarray] = None
+
+    def _setup_rerun(self):
+        """Initialize Rerun visualization."""
+        rr.init("stage1_raw_recorder", spawn=True)
+        rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+
+        # Log world origin
+        rr.log("world_origin", rr.Transform3D(axis_length=0.1), static=True)
+
+        self._rerun_initialized = True
+        print("Rerun visualization started")
+
+    def _visualize_controller(self, controller: ControllerState, hand: str):
+        """Visualize controller pose in Rerun."""
+        if not self._rerun_initialized:
+            return
+
+        pos = np.array(controller.position)
+        quat = np.array(controller.orientation)  # xyzw
+
+        # Log controller transform
+        rr.log(
+            f"controller/{hand}",
+            rr.Transform3D(
+                translation=pos,
+                rotation=rr.Quaternion(xyzw=quat.tolist()),
+                axis_length=0.05,
+            ),
+        )
+
+        # Log as point for trajectory visualization
+        rr.log(
+            f"controller/{hand}/position",
+            rr.Points3D([pos], radii=0.01),
+        )
+
+        # Log trigger/grip values
+        buttons = controller.buttons or {}
+        trigger = buttons.get("trigger", {}).get("value", 0.0)
+        grip = buttons.get("grip", {}).get("value", 0.0)
+
+        rr.log("buttons/trigger", rr.Scalar(trigger))
+        rr.log("buttons/grip", rr.Scalar(grip))
+
+    def _visualize_camera_frame(self, frame: np.ndarray):
+        """Visualize camera frame in Rerun."""
+        if not self._rerun_initialized:
+            return
+
+        # Convert BGR to RGB for display
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rr.log("camera/image", rr.Image(frame_rgb))
+
+    def _visualize_status(self):
+        """Visualize recording status in Rerun."""
+        if not self._rerun_initialized:
+            return
+
+        status = "RECORDING" if self.is_recording else "IDLE"
+        color = [255, 0, 0] if self.is_recording else [128, 128, 128]
+
+        rr.log(
+            "status/recording",
+            rr.TextLog(
+                f"Episode {self.episode_count} - {status} "
+                f"[Traj: {len(self.trajectory_buffer)}, Video: {self.video_frame_count}]"
+            ),
+        )
+
+        if self.is_recording:
+            rr.log("recording/trajectory_frames", rr.Scalar(len(self.trajectory_buffer)))
+            rr.log("recording/video_frames", rr.Scalar(self.video_frame_count))
+
     async def setup(self):
         """Initialize camera and server connection."""
         print(f"Setting up Stage 1 Raw Recorder...")
@@ -133,6 +211,9 @@ class RawRecorder:
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize Rerun visualization
+        self._setup_rerun()
 
         # Print controls
         self._print_controls()
@@ -332,14 +413,14 @@ class RawRecorder:
         )
         self.trajectory_buffer.append(frame)
 
-    def _capture_video_frame(self):
+    def _capture_video_frame(self) -> Optional[np.ndarray]:
         """Capture a single video frame."""
         if self.camera is None:
-            return
+            return None
 
         ret, frame = self.camera.read()
         if not ret or frame is None:
-            return
+            return None
 
         timestamp_ns = time.time_ns()
 
@@ -358,6 +439,10 @@ class RawRecorder:
         )
         self.video_timestamps.append(video_ts)
         self.video_frame_count += 1
+
+        # Store for visualization
+        self._latest_frame = frame
+        return frame
 
     def on_pose_update(self, pose: PoseData):
         """Callback for pose updates from server."""
@@ -400,11 +485,21 @@ class RawRecorder:
 
                     # Capture video at 60Hz
                     if current_time - last_video_time >= video_interval:
-                        self._capture_video_frame()
+                        frame = self._capture_video_frame()
+                        if frame is not None:
+                            self._visualize_camera_frame(frame)
                         last_video_time = current_time
+
+                # Visualize controller pose (always, even when not recording)
+                if self.latest_pose:
+                    hand = self.config.controller_hand
+                    controller = self.latest_pose.right if hand == "right" else self.latest_pose.left
+                    if controller:
+                        self._visualize_controller(controller, hand)
 
                 # Status update every 2 seconds
                 if current_time - last_status_time >= 2.0:
+                    self._visualize_status()
                     if self.is_recording:
                         print(
                             f"\r  Recording: {len(self.trajectory_buffer)} traj, "

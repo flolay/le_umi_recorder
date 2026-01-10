@@ -20,6 +20,7 @@ from typing import List, Optional
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import rerun as rr
 from scipy.spatial.transform import Rotation
 
 from .schemas import (
@@ -73,6 +74,65 @@ class IKPostProcessor:
         # Scaling factors
         self.vr_to_robot_pos_scale = 1.0
         self.vr_to_robot_ori_scale = 1.0
+
+        # Rerun visualization
+        self._rerun_initialized = False
+        self.robot_viz = None
+
+    def _setup_rerun(self):
+        """Initialize Rerun visualization."""
+        rr.init("stage2_ik_solver", spawn=True)
+        rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+
+        # Log world origin
+        rr.log("world_origin", rr.Transform3D(axis_length=0.1), static=True)
+
+        # Log robot base transform (180° around Z)
+        robot_rot = Rotation.from_euler('z', 180, degrees=True).as_quat()
+        rr.log(
+            "robot_base",
+            rr.Transform3D(
+                translation=[0.0, 0.0, 0.0],
+                rotation=rr.Quaternion(xyzw=robot_rot.tolist()),
+            ),
+            static=True,
+        )
+
+        # Try to load URDF visualizer
+        try:
+            from umi.utils.rerun_urdf import RerunURDFVisualizer
+            self.robot_viz = RerunURDFVisualizer(self.urdf_path)
+            self.robot_viz._load_urdf_to_rerun()
+            print("URDF visualization loaded")
+        except Exception as e:
+            print(f"Warning: Could not load URDF visualizer: {e}")
+            self.robot_viz = None
+
+        self._rerun_initialized = True
+        print("Rerun visualization started")
+
+    def _visualize_joint_state(self, joint_state: JointState, frame_idx: int, total_frames: int):
+        """Visualize current joint state in Rerun."""
+        if not self._rerun_initialized:
+            return
+
+        # Log joint angles
+        for i, name in enumerate(self.arm_joint_names):
+            value = getattr(joint_state, name, 0.0)
+            rr.log(f"joints/{name}", rr.Scalar(value))
+
+        # Log IK error
+        rr.log("ik/error", rr.Scalar(joint_state.ik_error))
+        rr.log("ik/success", rr.Scalar(1.0 if joint_state.ik_success else 0.0))
+
+        # Log progress
+        progress = (frame_idx + 1) / total_frames
+        rr.log("progress", rr.Scalar(progress))
+
+        # Update robot visualization
+        if self.robot_viz:
+            positions_dict = {name: getattr(joint_state, name, 0.0) for name in self.arm_joint_names}
+            self.robot_viz.set_joint_positions(positions_dict)
 
     def _setup_transforms(self):
         """Set up coordinate frame transforms."""
@@ -306,20 +366,30 @@ class IKPostProcessor:
         # Reset IK state
         self.reset()
 
+        # Initialize Rerun visualization
+        self._setup_rerun()
+
         # Solve IK for each frame
         print("  Solving IK for each frame...")
         joint_states: List[JointState] = []
         success_count = 0
+        total_frames = len(interpolated_frames)
 
         for i, frame in enumerate(interpolated_frames):
+            # Set Rerun time
+            rr.set_time_sequence("frame", i)
+
             joint_state = self.solve_ik(frame)
             joint_states.append(joint_state)
 
             if joint_state.ik_success:
                 success_count += 1
 
+            # Visualize every frame (for animation playback)
+            self._visualize_joint_state(joint_state, i, total_frames)
+
             if (i + 1) % 100 == 0:
-                print(f"    Processed {i + 1}/{len(interpolated_frames)} frames")
+                print(f"    Processed {i + 1}/{total_frames} frames")
 
         # Save results
         joints_table = joint_states_to_table(joint_states)

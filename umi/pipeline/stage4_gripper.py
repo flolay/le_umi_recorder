@@ -18,8 +18,10 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+import cv2
 import numpy as np
 import pyarrow.parquet as pq
+import rerun as rr
 
 from .schemas import (
     Stage4Config,
@@ -57,6 +59,65 @@ class GripperDetector:
         """
         self.config = config
         self.client: Optional[GeminiClient] = None
+        self._rerun_initialized = False
+
+    def _setup_rerun(self):
+        """Initialize Rerun visualization."""
+        rr.init("stage4_gripper_detector", spawn=True)
+        rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+        self._rerun_initialized = True
+        print("Rerun visualization started")
+
+    def _visualize_gripper_results(
+        self,
+        gripper_states: List[GripperState],
+        video_path: Path,
+    ):
+        """Visualize gripper detection results with video playback."""
+        if not self._rerun_initialized:
+            return
+
+        # Open video for frame extraction
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            print(f"Warning: Could not open video for visualization: {video_path}")
+            return
+
+        total_frames = len(gripper_states)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 60
+
+        print(f"  Visualizing {total_frames} frames...")
+
+        for i, state in enumerate(gripper_states):
+            # Set Rerun time
+            rr.set_time_sequence("frame", i)
+            rr.set_time_seconds("time", i / fps)
+
+            # Read video frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                rr.log("video/frame", rr.Image(frame_rgb))
+
+            # Log gripper states
+            rr.log("gripper/measured", rr.Scalar(state.measured_state))
+            rr.log("gripper/commanded", rr.Scalar(state.commanded_state))
+            rr.log("gripper/confidence", rr.Scalar(state.confidence))
+
+            # Log annotation as text
+            if state.annotation:
+                rr.log("gripper/annotation", rr.TextLog(state.annotation))
+
+            # Log difference (commanded - measured)
+            diff = state.commanded_state - state.measured_state
+            rr.log("gripper/difference", rr.Scalar(diff))
+
+            if (i + 1) % 100 == 0:
+                print(f"    Visualized {i + 1}/{total_frames} frames")
+
+        cap.release()
+        print(f"  Visualization complete")
 
     async def setup(self):
         """Initialize Gemini client."""
@@ -266,8 +327,14 @@ class GripperDetector:
 
         print(f"  Loaded {len(video_timestamps)} video timestamps")
 
+        # Initialize Rerun visualization
+        self._setup_rerun()
+
         # Detect gripper states
         gripper_states = await self.detect_gripper_states(video_path, video_timestamps)
+
+        # Visualize results with video playback
+        self._visualize_gripper_results(gripper_states, video_path)
 
         # Save results
         gripper_table = gripper_states_to_table(gripper_states)
