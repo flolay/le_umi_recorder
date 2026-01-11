@@ -201,7 +201,7 @@ class LeRobotDatasetRecorder:
         # === Robot Frame Transforms ===
 
         # Robot base rotation (180° around Z so robot faces user)
-        self.robot_base_rotation = Rotation.from_euler('z', 180, degrees=True).as_matrix()
+        self.robot_base_rotation = Rotation.from_euler('z', -90, degrees=True).as_matrix()
 
         # Tool-to-gripper rotation: swaps X↔Y axes to align controller with robot gripper
         self.tool_to_gripper_rotation = np.array([
@@ -412,7 +412,7 @@ class LeRobotDatasetRecorder:
                     self.ik_robot.set_joint(name, 0.0)
                 self.ik_robot.update_kinematics()
                 # Get home gripper_frame pose for relative control
-                self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper_frame").copy()
+                self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper").copy()
                 # Update visualization
                 if self.robot_viz:
                     positions_dict = {name: 0.0 for name in self.arm_joint_names}
@@ -451,8 +451,8 @@ class LeRobotDatasetRecorder:
         self.ik_solver.dt = 1.0 / self.fps
 
         # Add frame task for gripper
-        self.ik_task = self.ik_solver.add_frame_task("gripper_frame", np.eye(4))
-        self.ik_task.configure("gripper_frame", "soft", 1.0, 0.2)
+        self.ik_task = self.ik_solver.add_frame_task("gripper", np.eye(4))
+        self.ik_task.configure("gripper", "soft", 1.0, 0.2)
         self.ik_solver.add_regularization_task(1e-4)
 
         # Set initial joint positions to zero (only arm joints)
@@ -461,7 +461,7 @@ class LeRobotDatasetRecorder:
         self.ik_robot.update_kinematics()
 
         # Initialize current robot pose to home position (for relative control)
-        self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper_frame").copy()
+        self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper").copy()
 
         print(f"  Robot arm joints: {self.arm_joint_names}")
         print("  Robot IK ready")
@@ -509,7 +509,7 @@ class LeRobotDatasetRecorder:
             self.origin_position = current_pos.copy()
             self.origin_quaternion = current_quat.copy()
             if self.current_robot_pose is None:
-                self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper_frame").copy()
+                self.current_robot_pose = self.ik_robot.get_T_world_frame("gripper").copy()
             print(f">>> Origin captured at pos={self.origin_position}")
 
         # Compute incremental deltas
