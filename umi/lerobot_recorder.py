@@ -422,7 +422,7 @@ class LeRobotDatasetRecorder:
     def _setup_robot_ik(self):
         """Initialize URDF visualizer and IK solver."""
         import placo
-        from rerun_urdf import RerunURDFVisualizer
+        from umi.utils.rerun_urdf import RerunURDFVisualizer
 
         print(f"\nInitializing robot IK with URDF: {self.urdf_path}")
 
@@ -1179,8 +1179,13 @@ Examples:
         recorder.finalize()
 
 
-if __name__ == '__main__':
+def cli():
+    """Entry point for the CLI (wraps async main)"""
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print('\nExiting...')
+
+
+if __name__ == '__main__':
+    cli()

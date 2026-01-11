@@ -326,7 +326,16 @@ class ControllerTrackingServer:
         logger.info(f'{protocol.upper()} server started on {protocol}://{self.host}:{self.http_port}')
 
         if ssl_context:
-            logger.info(f'✓ WebXR will work! Access from Quest: {protocol}://<your-ip>:{self.http_port}')
+            # Get local IP address for Quest access
+            import socket
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                s.close()
+            except Exception:
+                local_ip = "<your-ip>"
+            logger.info(f'✓ WebXR will work! Access from Quest: {protocol}://{local_ip}:{self.http_port}')
         else:
             logger.warning(f'⚠ WebXR requires HTTPS! Generate certificates with: python generate_cert.py')
 
